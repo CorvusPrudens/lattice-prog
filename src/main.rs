@@ -78,15 +78,15 @@ impl Programmer {
             .with_context(|| "Failed to acquire flash CS pin")?
             .into_output_high();
 
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        sleep(1);
         // Set CRESET_B low for at least 200 ns, ensuring the FPGA's CS is low when reset is
         // released
         fpga_reset.set_low();
         fpga_cs.set_low();
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        sleep(1);
         // Wait for at least 1200 us as the FPGA clears configuration memory
         fpga_reset.set_high();
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        sleep(10);
 
         // Set CS high and clock in 8 dummy bits
         fpga_cs.set_high();
@@ -121,9 +121,9 @@ impl Programmer {
             bar.inc(block.len() as u64);
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        sleep(1);
         self.fpga_cs.set_high();
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        sleep(1);
 
         Ok(())
     }
@@ -137,6 +137,10 @@ impl Programmer {
 
         Ok(())
     }
+}
+
+fn sleep(milliseconds: u64) {
+    std::thread::sleep(std::time::Duration::from_millis(milliseconds));
 }
 
 fn program(filepath: PathBuf, baud: u32, transfer: usize) -> Result<()> {
@@ -155,7 +159,7 @@ fn main() {
     let message = match (result, reset) {
         (Ok(_), Ok(_)) => "Succesfully programmed device!".into(),
         (Err(e), Ok(_)) => format!("Failed to program device: {e:#?}"),
-        (Ok(e), Err(_)) => format!("Succesfully programmed device, but failed to reset: {e:#?}"),
+        (Ok(_), Err(r)) => format!("Succesfully programmed device, but failed to reset: {r:#?}"),
         (Err(e), Err(r)) => {
             format!("Failed to program device: {e:#?}\nAnd failed to reset: {r:#?}")
         }
