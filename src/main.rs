@@ -40,7 +40,7 @@ struct Cli {
     /// SPI baud rate
     ///
     /// Values that are too low or too high seem to corrupt the bitstream.
-    #[arg(short, long, default_value = "20000000")]
+    #[arg(short, long, default_value = "10000000")]
     baud: u32,
 
     /// SPI transfer buffer size
