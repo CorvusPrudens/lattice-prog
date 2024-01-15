@@ -1,0 +1,20 @@
+# To build, simply run `cross build --release --target armv7-unknown-linux-musleabihf`
+
+[package]
+name = "lattice-prog"
+version = "0.1.0"
+edition = "2021"
+authors = ["Corvus Prudens"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.79"
+clap = { version = "4.4.16", features = ["derive"] }
+indicatif = "0.17.7"
+rppal = "0.16.1"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+strip = true
