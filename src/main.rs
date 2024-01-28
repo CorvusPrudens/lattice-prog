@@ -8,10 +8,13 @@
 //! whatever the correct target may be for the intended device.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use flash::FlashProgrammer;
 use rppal::gpio::{Gpio, OutputPin};
 use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
 use std::path::PathBuf;
+
+mod flash;
 
 /// Program a lattice FPGA with the provided synthesized design.
 ///
@@ -34,32 +37,46 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(author, version, long_about, verbatim_doc_comment)]
 struct Cli {
-    /// Path to the input RTL
-    input: PathBuf,
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    /// SPI baud rate
-    ///
-    /// Values that are too low or too high seem to corrupt the bitstream.
-    #[arg(short, long, default_value = "10000000")]
-    baud: u32,
+#[derive(Subcommand)]
+enum Commands {
+    /// Program the FPGA's internal flash
+    Sram {
+        /// Path to the input RTL
+        input: PathBuf,
 
-    /// SPI transfer buffer size
-    ///
-    /// The maximum possible value is 65536, but any value above 4096 must be set in the Pi's
-    /// boot configuration (by inserting spidev.bufsiz=<desired value> in /boot/cmdline.txt).
-    #[arg(short, long, default_value = "16384")]
-    transfer: usize,
+        /// SPI baud rate
+        ///
+        /// Values that are too low or too high seem to corrupt the bitstream.
+        #[arg(short, long, default_value = "10000000")]
+        baud: u32,
+
+        /// SPI transfer buffer size
+        ///
+        /// The maximum possible value is 65536, but any value above 4096 must be set in the Pi's
+        /// boot configuration (by inserting spidev.bufsiz=<desired value> in /boot/cmdline.txt).
+        #[arg(short, long, default_value = "16384")]
+        transfer: usize,
+    },
+    /// Program the flash chip
+    Flash {
+        /// Path to the input RTL
+        input: PathBuf,
+    },
 }
 
 #[allow(dead_code)]
-struct Programmer {
+struct SramProgrammer {
     spi: Spi,
     fpga_reset: OutputPin,
     fpga_cs: OutputPin,
     flash_cs: OutputPin,
 }
 
-impl Programmer {
+impl SramProgrammer {
     pub fn new(baud: u32) -> Result<Self> {
         let mut spi = Spi::new(Bus::Spi0, SlaveSelect::Ss0, baud, Mode::Mode0)
             .with_context(|| "Failed to acquire SPI")?;
@@ -145,24 +162,50 @@ fn sleep(milliseconds: u64) {
 
 fn program(filepath: PathBuf, baud: u32, transfer: usize) -> Result<()> {
     let data = std::fs::read(filepath).with_context(|| "Error reading input file")?;
-    let programmer = Programmer::new(baud)?;
+    let programmer = SramProgrammer::new(baud)?;
     programmer.program_bytes(data, transfer)?;
+
+    Ok(())
+}
+
+fn flash(filepath: PathBuf) -> Result<()> {
+    let data = std::fs::read(filepath).with_context(|| "Error reading input file")?;
+    let mut programmer = FlashProgrammer::new()?;
+    println!("Flashing data...");
+    programmer.flash_data(&data, 0)?;
+    println!("Verifying data...");
+    programmer.verify_data(&data, 0)?;
 
     Ok(())
 }
 
 fn main() {
     let args = Cli::parse();
-    let result = program(args.input, args.baud, args.transfer);
-    let reset = Programmer::reset();
 
-    let message = match (result, reset) {
-        (Ok(_), Ok(_)) => "Succesfully programmed device!".into(),
-        (Err(e), Ok(_)) => format!("Failed to program device: {e:#?}"),
-        (Ok(_), Err(r)) => format!("Succesfully programmed device, but failed to reset: {r:#?}"),
-        (Err(e), Err(r)) => {
-            format!("Failed to program device: {e:#?}\nAnd failed to reset: {r:#?}")
+    let message = match args.command {
+        Commands::Sram {
+            input,
+            baud,
+            transfer,
+        } => {
+            let result = program(input, baud, transfer);
+            let reset = SramProgrammer::reset();
+
+            match (result, reset) {
+                (Ok(_), Ok(_)) => "Succesfully programmed device!".into(),
+                (Err(e), Ok(_)) => format!("Failed to program device: {e}"),
+                (Ok(_), Err(r)) => {
+                    format!("Succesfully programmed device, but failed to reset: {r}")
+                }
+                (Err(e), Err(r)) => {
+                    format!("Failed to program device: {e}\nAnd failed to reset: {r}")
+                }
+            }
         }
+        Commands::Flash { input } => match flash(input) {
+            Ok(_) => "Succesfully flashed device!".into(),
+            Err(e) => format!("Failed to flash device: {e}"),
+        },
     };
 
     println!("{message}");
