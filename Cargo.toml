@@ -13,6 +13,7 @@ anyhow = "1.0.79"
 clap = { version = "4.4.16", features = ["derive"] }
 indicatif = "0.17.7"
 rppal = "0.16.1"
+spin_sleep = "1.2.0"
 
 [profile.release]
 codegen-units = 1

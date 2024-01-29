@@ -66,6 +66,16 @@ enum Commands {
         /// Path to the input RTL
         input: PathBuf,
     },
+    /// Dump the flash
+    Dump {
+        /// The address to dump
+        #[arg(short, long, default_value = "0")]
+        address: usize,
+
+        /// The amount of bytes to dump
+        #[arg(short, long, default_value = "256")]
+        length: usize,
+    },
 }
 
 #[allow(dead_code)]
@@ -179,8 +189,15 @@ fn flash(filepath: PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn dump(address: usize, length: usize) -> Result<Vec<u8>> {
+    let mut programmer = FlashProgrammer::new()?;
+
+    Ok(programmer.read_arbitrary(address, length))
+}
+
 fn main() {
     let args = Cli::parse();
+    use std::io::Write;
 
     let message = match args.command {
         Commands::Sram {
@@ -202,10 +219,28 @@ fn main() {
                 }
             }
         }
-        Commands::Flash { input } => match flash(input) {
-            Ok(_) => "Succesfully flashed device!".into(),
-            Err(e) => format!("Failed to flash device: {e}"),
-        },
+        Commands::Flash { input } => {
+            FlashProgrammer::reset().expect("Error releasing pins");
+
+            match flash(input) {
+                Ok(_) => "Succesfully flashed device!".into(),
+                Err(e) => format!("Failed to flash device: {e}"),
+            }
+        }
+        Commands::Dump { address, length } => {
+            FlashProgrammer::reset().expect("Error releasing pins");
+
+            match dump(address, length) {
+                Ok(data) => {
+                    std::io::stdout().write_all(&data).unwrap();
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Error dumping data: {e}");
+                    return;
+                }
+            }
+        }
     };
 
     println!("{message}");

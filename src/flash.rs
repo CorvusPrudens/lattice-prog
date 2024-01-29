@@ -5,11 +5,15 @@ use rppal::gpio::{Gpio, InputPin, OutputPin};
 #[allow(dead_code)]
 pub struct FlashProgrammer {
     fpga_reset: OutputPin,
-    fpga_cs: OutputPin,
+    fpga_cs: InputPin,
     flash_cs: OutputPin,
     flash_sdi: OutputPin,
     flash_sdo: InputPin,
     flash_sck: OutputPin,
+}
+
+fn pin_sleep() {
+    spin_sleep::sleep(std::time::Duration::from_micros(1));
 }
 
 impl FlashProgrammer {
@@ -28,37 +32,33 @@ impl FlashProgrammer {
             .get(6)
             .with_context(|| "Failed to acquire FPGA reset pin")?
             .into_output_high();
-        let mut fpga_cs = gpio
+        let fpga_cs = gpio
             .get(13)
             .with_context(|| "Failed to acquire FPGA CS pin")?
-            .into_output_high();
+            .into_input();
         let flash_cs = gpio
             .get(5)
             .with_context(|| "Failed to acquire flash CS pin")?
             .into_output_high();
         let flash_sdi = gpio
-            .get(10)
+            .get(9)
             .with_context(|| "Failed to acquire flash SDI")?
             .into_output_high();
         let flash_sck = gpio
-            .get(10)
+            .get(11)
             .with_context(|| "Failed to acquire flash SCK")?
             .into_output_low();
         let flash_sdo = gpio
-            .get(9)
+            .get(10)
             .with_context(|| "Failed to acquire flash SDO")?
             .into_input();
 
         // Here we allow the FPGA to reset and fail configuration, releasing the SPI bus
         sleep(1);
-        // Set CRESET_B low for at least 200 ns, ensuring the FPGA's CS is low when reset is
-        // released
         fpga_reset.set_low();
-        fpga_cs.set_low();
         sleep(1);
-        // Wait for at least 1200 us as the FPGA clears configuration memory
-        fpga_reset.set_high();
-        sleep(500);
+        // fpga_reset.set_high();
+        // sleep(1000);
 
         let mut programmer = Self {
             fpga_reset,
@@ -69,7 +69,11 @@ impl FlashProgrammer {
             flash_sdo,
         };
 
+        programmer.flash_cs.set_low();
+        pin_sleep();
         programmer.write(Self::WAKE);
+        programmer.flash_cs.set_high();
+        pin_sleep();
 
         Ok(programmer)
     }
@@ -124,37 +128,27 @@ impl FlashProgrammer {
         let mut value = 0;
         for i in 0..8 {
             self.flash_sck.set_high();
+            pin_sleep();
             let level: u8 = matches!(self.flash_sdo.read(), rppal::gpio::Level::High) as u8;
             value |= level;
             if i < 7 {
                 value <<= 1;
             }
             self.flash_sck.set_low();
+            pin_sleep();
         }
         value
-    }
-
-    fn status(&mut self) -> u8 {
-        self.flash_cs.set_low();
-        self.write(Self::READ_STATUS_1);
-        let output = self.read();
-        self.flash_cs.set_high();
-        output
-    }
-
-    fn write_enable(&mut self) {
-        self.flash_cs.set_low();
-        self.write(Self::WRITE_ENABLE);
-        self.flash_cs.set_high();
     }
 
     fn write(&mut self, byte: u8) {
         for i in (0..8).rev() {
             let level = (byte & (1 << i)) > 0;
             self.flash_sdi.write(level.into());
+            self.flash_sck.set_high();
+            pin_sleep();
 
             self.flash_sck.set_low();
-            self.flash_sck.set_high();
+            pin_sleep();
         }
     }
 
@@ -172,6 +166,7 @@ impl FlashProgrammer {
         self.write_enable();
 
         self.flash_cs.set_low();
+        pin_sleep();
         self.write(Self::PROGRAM);
 
         self.write_address(address);
@@ -180,21 +175,60 @@ impl FlashProgrammer {
             self.write(*byte);
         }
         self.flash_cs.set_high();
+        pin_sleep();
 
         Ok(())
+    }
+
+    fn status(&mut self) -> u8 {
+        self.flash_cs.set_low();
+        pin_sleep();
+        self.write(Self::READ_STATUS_1);
+        let output = self.read();
+        self.flash_cs.set_high();
+        pin_sleep();
+        output
+    }
+
+    fn write_enable(&mut self) {
+        self.flash_cs.set_low();
+        pin_sleep();
+        self.write(Self::WRITE_ENABLE);
+        self.flash_cs.set_high();
+        pin_sleep();
     }
 
     fn read_page(&mut self, address: usize) -> [u8; 256] {
         let mut data = [0; 256];
 
         self.flash_cs.set_low();
+        pin_sleep();
         self.write(Self::READ);
         self.write_address(address);
 
         for byte in data.iter_mut() {
             *byte = self.read();
         }
+        self.flash_cs.set_high();
+        pin_sleep();
+
+        data
+    }
+
+    pub fn read_arbitrary(&mut self, address: usize, length: usize) -> Vec<u8> {
+        let mut data = Vec::with_capacity(length);
+
         self.flash_cs.set_low();
+        pin_sleep();
+        self.write(Self::READ);
+        self.write_address(address);
+
+        for _ in 0..length {
+            data.push(self.read());
+        }
+
+        self.flash_cs.set_high();
+        pin_sleep();
 
         data
     }
@@ -203,12 +237,27 @@ impl FlashProgrammer {
         self.write_enable();
 
         self.flash_cs.set_low();
+        pin_sleep();
         self.write(Self::BLOCK_ERASE);
         self.write_address(address);
         self.flash_cs.set_high();
+        pin_sleep();
     }
 
     fn await_ready(&mut self) {
         while (self.status() & 1) > 0 {}
+    }
+
+    pub fn reset() -> anyhow::Result<()> {
+        let gpio = Gpio::new().with_context(|| "Failed to acquire GPIO")?;
+
+        gpio.get(6)?.into_input().set_reset_on_drop(false);
+        gpio.get(13)?.into_input().set_reset_on_drop(false);
+        gpio.get(5)?.into_input().set_reset_on_drop(false);
+        gpio.get(9)?.into_input().set_reset_on_drop(false);
+        gpio.get(11)?.into_input().set_reset_on_drop(false);
+        gpio.get(10)?.into_input().set_reset_on_drop(false);
+
+        Ok(())
     }
 }
